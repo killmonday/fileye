@@ -1,0 +1,11 @@
+# Vim 交换文件
+.swp
+.swo
+.swn
+
+# Emacs / Vim 备份文件
+~
+
+# 通用临时文件
+.tmp
+

@@ -214,7 +214,7 @@ func (w *inotify) AddWith(path string, opts ...addOpt) error {
 		if with.op.Has(xUnportableRead) {
 			flags |= unix.IN_ACCESS
 		}
-		if with.op.Has(xUnportableCloseWrite) {
+		if with.op.Has(CloseWrite) {
 			flags |= unix.IN_CLOSE_WRITE
 		}
 		if with.op.Has(xUnportableCloseRead) {
@@ -472,11 +472,20 @@ func (w *inotify) handleEvent(inEvent *unix.InotifyEvent, buf *[65536]byte, offs
 	}
 
 	ev := w.newEvent(name, inEvent.Mask, inEvent.Cookie)
+	// fmt.Println("[debug] handleEvent: renamedFrom:", ev.renamedFrom)
+
+	if inEvent.Mask&unix.IN_IGNORED != 0 || inEvent.Mask&unix.IN_UNMOUNT != 0 {
+		return ev, true
+	}
+
 	// Need to update watch path for recurse.
 	if watch.recurse {
+		fmt.Println("[debug] backend_inotify: start:", ev.renamedFrom)
+
 		isDir := inEvent.Mask&unix.IN_ISDIR == unix.IN_ISDIR
 		/// New directory created: set up watch on it.
 		if isDir && ev.Has(Create) {
+
 			err := w.register(ev.Name, watch.flags, true)
 			if !w.sendError(err) {
 				return Event{}, false
@@ -498,10 +507,16 @@ func (w *inotify) handleEvent(inEvent *unix.InotifyEvent, buf *[65536]byte, offs
 					if strings.HasPrefix(ww.path, ev.renamedFrom) {
 						ww.path = strings.Replace(ww.path, ev.renamedFrom, ev.Name, 1)
 						w.watches.wd[k] = ww
+
 					}
 				}
 			}
 		}
+
+	}
+	isDir := inEvent.Mask&unix.IN_ISDIR == unix.IN_ISDIR
+	if isDir && ev.Has(Create) && ev.renamedFrom != "" {
+		ev.IsDir = true
 	}
 
 	return ev, true
@@ -533,7 +548,7 @@ func (w *inotify) newEvent(name string, mask, cookie uint32) Event {
 		e.Op |= xUnportableRead
 	}
 	if mask&unix.IN_CLOSE_WRITE == unix.IN_CLOSE_WRITE {
-		e.Op |= xUnportableCloseWrite
+		e.Op |= CloseWrite
 	}
 	if mask&unix.IN_CLOSE_NOWRITE == unix.IN_CLOSE_NOWRITE {
 		e.Op |= xUnportableCloseRead
@@ -547,6 +562,7 @@ func (w *inotify) newEvent(name string, mask, cookie uint32) Event {
 
 	if cookie != 0 {
 		if mask&unix.IN_MOVED_FROM == unix.IN_MOVED_FROM {
+			// fmt.Println("----fuck11  : ", e.Op, e.Name, cookie)
 			w.cookiesMu.Lock()
 			w.cookies[w.cookieIndex] = koekje{cookie: cookie, path: e.Name}
 			w.cookieIndex++
@@ -555,6 +571,8 @@ func (w *inotify) newEvent(name string, mask, cookie uint32) Event {
 			}
 			w.cookiesMu.Unlock()
 		} else if mask&unix.IN_MOVED_TO == unix.IN_MOVED_TO {
+			// fmt.Println("----fuck22  : ", e.Op, e.Name, cookie)
+
 			w.cookiesMu.Lock()
 			var prev string
 			for _, c := range w.cookies {

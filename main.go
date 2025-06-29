@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"flag"
@@ -9,12 +10,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
-	"bufio"
 	"regexp"
 	"strings"
+	"time"
 
 	"crypto/tls"
+
 	"github.com/fsnotify/fsnotify"
 	// "golang.org/x/sys/unix"
 )
@@ -28,17 +29,14 @@ type FileEvent struct {
 	date         time.Time
 }
 
-
 var (
-	prefixes []string          // 需要排除的文件名前缀列表
-	suffixes []string          // 需要排除的文件名后缀列表
-	regexps  []*regexp.Regexp  // 需要排除的正则表达式列表
+	prefixes     []string             // 需要排除的文件名前缀列表
+	suffixes     []string             // 需要排除的文件名后缀列表
+	regexps      []*regexp.Regexp     // 需要排除的正则表达式列表
 	fileEventMap map[string]FileEvent // 用来CloseWrite事件的存储文件路径和它最后触发时间的映射
-	django_url = "http://127.0.0.1:80/smb_active"
-	watch_dir = ""
+	django_url   = "http://127.0.0.1:80/smb_active"
+	watch_dir    = ""
 )
-
-
 
 // InitExcludes 初始化排除规则，从文件中加载前缀、后缀和正则表达式
 func InitExcludes() error {
@@ -170,7 +168,6 @@ func init() {
 		return
 	}
 
-
 }
 
 func main() {
@@ -216,19 +213,21 @@ func main() {
 				fmt.Println("[event]", event)
 				if event.Has(fsnotify.Write) || event.Has(fsnotify.Remove) || event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) || event.Has(fsnotify.CloseWrite) {
 					if event.Has(fsnotify.Create) {
-						is_dir, err := isDir(event.Name)
-						if err != nil {
-							continue
-						}
-						if is_dir {
+						// is_dir, err := isDir(event.Name)
+						// if err != nil {
+						// 	continue
+						// }
+						if event.IsDir {
+							go func() {
+								err := watchDir(watcher, event.Name)
+								if err != nil {
+									log.Fatal("Error watching directory:", err)
+								}
+							}()
 							fmt.Println("[debug] add dir:", event.Name)
-							// 添加监控
-							err = watcher.Add(event.Name)
-							if err != nil {
-								log.Println("Error adding watcher to subdirectory:", event.Name)
-							}
 							continue
 						} else {
+							// 文件的移动或重命名才有必要提交到django
 							handleFileEvent(watcher, event)
 						}
 
@@ -266,16 +265,21 @@ func watchDir(watcher *fsnotify.Watcher, dir string) error {
 	}
 
 	// 遍历并递归监控子目录
-	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+
+	err = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			log.Println("Error accessing path:", err)
-			return err
+			// 如果遍历过程中出错（如权限问题），打印错误并继续
+			fmt.Printf("访问路径出错: %v, 错误: %v\n", path, err)
+			return nil // 继续遍历其他目录
 		}
-		if info.IsDir() {
+		//只需要添加目录到watch，不需要文件
+		if d.IsDir() {
 			// 跳过监控当前目录
 			if path == dir {
 				return nil
 			}
+			// fmt.Println("[debug] watchDir:", path)
+
 			// 监控子目录
 			err := watcher.Add(path)
 			if err != nil {
@@ -290,37 +294,6 @@ func watchDir(watcher *fsnotify.Watcher, dir string) error {
 
 // 处理WRITE事件，更新文件的时间戳
 func handleFileEvent(w *fsnotify.Watcher, event fsnotify.Event) {
-	// 更新或添加文件到map，记录当前的时间，仅记录Write事件
-	// fmt.Println("事件类型：", event.Op)
-
-	////文件写入
-	//if event.Has(fsnotify.Write) {
-	//	fileEventMap[event.Name] = FileEvent{
-	//		EventType:    "write",
-	//		FilePath:     event.Name,
-	//		MoveFromPath: "",
-	//		date:         time.Now(),
-	//	}
-	//} else if event.Has(fsnotify.Remove) {
-	//	//文件删除
-	//	fileEventMap[event.Name] = FileEvent{
-	//		EventType:    "remove",
-	//		FilePath:     event.Name,
-	//		MoveFromPath: "",
-	//		date:         time.Now(),
-	//	}
-	//
-	//} else if event.Has(fsnotify.Create) {
-	//	//文件创建/重命名/移动
-	//	fmt.Println("文件创建自：", event.GetMoveFrom())
-	//	fileEventMap[event.Name] = FileEvent{
-	//		EventType:    "create",
-	//		FilePath:     event.Name,
-	//		MoveFromPath: event.GetMoveFrom(),
-	//		date:         time.Now(),
-	//	}
-	//}
-
 	if ShouldExclude(event.Name) {
 		fmt.Println("[debug] do not sent file:", event.Name)
 		return
@@ -353,8 +326,6 @@ func handleFileEvent(w *fsnotify.Watcher, event fsnotify.Event) {
 			go post_file_active(e)
 		}
 	}
-
-	//
 }
 
 func post_file_active(event FileEvent) {
@@ -400,12 +371,8 @@ func monitorFileEvents() {
 		for filePath, saveEvent := range fileEventMap {
 			// 如果文件的时间戳已经超过5秒
 			if now.Sub(saveEvent.date) > 5*time.Second {
-				fmt.Println("[发送] 事件：", saveEvent)
-				// 发送事件信息到API
-				//fileEvent := FileEvent{
-				//	EventType: "WRITE",
-				//	FilePath:  filePath,
-				//}
+				fmt.Println("[http提交] 事件：", saveEvent)
+
 				keysToDelete = append(keysToDelete, filePath)
 				go func() {
 					post_file_active(saveEvent)

@@ -167,6 +167,7 @@ type Event struct {
 	//   Event{Op: Rename, Name: "/tmp/file"}
 	//   Event{Op: Create, Name: "/tmp/rename", RenamedFrom: "/tmp/file"}
 	renamedFrom string
+	IsDir       bool
 }
 
 func (e Event) GetMoveFrom() string {
@@ -220,7 +221,7 @@ const (
 	// waiting for Write events to stop. It's also faster (if you're not
 	// listening to Write events): copying a file of a few GB can easily
 	// generate tens of thousands of Write events in a short span of time.
-	xUnportableCloseWrite
+	CloseWrite
 
 	// File opened for reading was closed.
 	//
@@ -369,7 +370,7 @@ func (o Op) String() string {
 	if o.Has(xUnportableRead) {
 		b.WriteString("|READ")
 	}
-	if o.Has(xUnportableCloseWrite) {
+	if o.Has(CloseWrite) {
 		b.WriteString("|CLOSE_WRITE")
 	}
 	if o.Has(xUnportableCloseRead) {
@@ -396,7 +397,7 @@ func (e Event) Has(op Op) bool { return e.Op.Has(op) }
 // String returns a string representation of the event with their path.
 func (e Event) String() string {
 	if e.renamedFrom != "" {
-		return fmt.Sprintf("%-13s %q ← %q", e.Op.String(), e.Name, e.renamedFrom)
+		return fmt.Sprintf("%-13s %q ← %q isDir:%t", e.Op.String(), e.Name, e.renamedFrom, e.IsDir)
 	}
 	return fmt.Sprintf("%-13s %q", e.Op.String(), e.Name)
 }
@@ -428,11 +429,12 @@ var debug = func() bool {
 	// options/flags in the future. I don't know if we ever want that, but it's
 	// nice to leave the option open.
 	return os.Getenv("FSNOTIFY_DEBUG") == "1"
+	// return true
 }()
 
 var defaultOpts = withOpts{
 	bufsize: 65536, // 64K
-	op:      Create | Write | Remove | Rename | Chmod,
+	op:      Create | Remove | Rename | Chmod | CloseWrite,
 }
 
 func getOptions(opts ...addOpt) withOpts {
