@@ -259,6 +259,7 @@ func isDir(path string) (bool, error) {
 // 递归监控目录
 func watchDir(watcher *fsnotify.Watcher, dir string) error {
 	// 监视目标目录的文件变化
+	// fmt.Println("[debug] add dir:", dir)
 	err := watcher.Add(dir)
 	if err != nil {
 		return fmt.Errorf("Error adding watcher to directory %s: %v", dir, err)

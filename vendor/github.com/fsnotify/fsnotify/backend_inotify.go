@@ -515,7 +515,7 @@ func (w *inotify) handleEvent(inEvent *unix.InotifyEvent, buf *[65536]byte, offs
 
 	}
 	isDir := inEvent.Mask&unix.IN_ISDIR == unix.IN_ISDIR
-	if isDir && ev.Has(Create) && ev.renamedFrom != "" {
+	if isDir && ev.Has(Create) {
 		ev.IsDir = true
 	}
 
