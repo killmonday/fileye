@@ -333,7 +333,7 @@ func (w *inotify) WatchList() []string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	entries := make([]string, 0, w.watches.len())
-	for pathname := range w.watches.path {
+	for pathname, _ := range w.watches.path {
 		entries = append(entries, pathname)
 	}
 	return entries

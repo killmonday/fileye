@@ -219,9 +219,10 @@ func main() {
 						// }
 						if event.IsDir {
 							go func() {
+								fmt.Println("event.name = ", event.Name)
 								err := watchDir(watcher, event.Name)
 								if err != nil {
-									log.Fatal("Error watching directory:", err)
+									fmt.Println("Error watching directory:", err)
 								}
 							}()
 							fmt.Println("[debug] add dir:", event.Name)
@@ -242,7 +243,7 @@ func main() {
 	}()
 
 	// 启动一个后台协程，定期检查文件事件map
-	go monitorFileEvents()
+	go monitorFileEvents(watcher)
 
 	// 阻塞，防止程序退出
 	select {}
@@ -256,21 +257,42 @@ func isDir(path string) (bool, error) {
 	return fileInfo.IsDir(), nil
 }
 
+func addWatchWithRetry(watcher *fsnotify.Watcher, dirPath string) error {
+	maxRetries := 10
+	delay := 50 * time.Millisecond
+
+	for i := 0; i < maxRetries; i++ {
+		time.Sleep(delay)
+		if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+			// 目录还不存在，稍后再试
+			continue
+		}
+		err := watcher.Add(dirPath)
+		if err != nil {
+			return fmt.Errorf("[error] Error adding watcher to directory %s: %v", dirPath, err)
+		} else {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("[error] failed to add watch for %s after %d retries, because dir is not create", dirPath, maxRetries)
+}
+
 // 递归监控目录
 func watchDir(watcher *fsnotify.Watcher, dir string) error {
 	// 监视目标目录的文件变化
 	// fmt.Println("[debug] add dir:", dir)
-	err := watcher.Add(dir)
-	if err != nil {
-		return fmt.Errorf("Error adding watcher to directory %s: %v", dir, err)
-	}
 
+	err := addWatchWithRetry(watcher, dir)
+	if err != nil {
+		return err
+	}
 	// 遍历并递归监控子目录
 
 	err = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			// 如果遍历过程中出错（如权限问题），打印错误并继续
-			fmt.Printf("访问路径出错: %v, 错误: %v\n", path, err)
+			fmt.Printf("[smb] 访问路径出错: %v, 错误: %v\n", path, err)
 			return nil // 继续遍历其他目录
 		}
 		//只需要添加目录到watch，不需要文件
@@ -363,7 +385,7 @@ func post_file_active(event FileEvent) {
 }
 
 // 后台协程，定期检查map中的文件，超时则发送请求
-func monitorFileEvents() {
+func monitorFileEvents(w *fsnotify.Watcher) {
 	for {
 		// 获取当前时间
 		now := time.Now()
@@ -390,5 +412,12 @@ func monitorFileEvents() {
 
 		// 每6秒钟检查一次
 		time.Sleep(5 * time.Second)
+		// w_list := w.WatchList()
+		// fmt.Println("=====================================================================")
+		// for _, d := range w_list {
+		// 	fmt.Println("[*] now watch:", d)
+		// }
+		// fmt.Println("==================================END================================")
+
 	}
 }
